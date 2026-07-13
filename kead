@@ -1,0 +1,457 @@
+#!/data/data/com.termux/files/usr/bin/bash
+
+# ==================================
+# KEAD CORE CONTROLLER
+# ==================================
+
+BASE="$HOME/KEAD"
+
+
+source "$BASE/config/settings.sh"
+
+
+source "$BASE/ui/colors.sh"
+source "$BASE/ui/header.sh"
+source "$BASE/ui/pipeline.sh"
+source "$BASE/ui/output.sh"
+source "$BASE/ui/runtime.sh"
+source "$BASE/ui/finish.sh"
+
+
+source "$BASE/engines/backend.sh"
+source "$BASE/engines/modular.sh"
+source "$BASE/engines/ncurses.sh"
+source "$BASE/engines/web.sh"
+
+
+
+kead_open_editor() {
+
+    local FILES=("$@")
+
+
+    nvim "${FILES[@]}"
+
+}
+
+
+kead_process_stage() {
+
+    local STAGE="$1"
+
+    clear
+
+    kead_header
+
+    echo
+
+    echo -e "${CYAN}[▶] ${STAGE}${NC}"
+
+    sleep "$PIPELINE_DELAY"
+
+}
+
+
+
+kead_prepare_editor_files() {
+
+    local MODE="$1"
+
+    shift
+
+
+    EDITOR_FILES=()
+
+
+    if [[ "$MODE" == "modular" ]]; then
+
+        local MAIN="$1"
+
+        shift
+
+
+        EDITOR_FILES+=("$MAIN")
+
+
+        for MODULE in "$@"
+        do
+            EDITOR_FILES+=("${MODULE}.h")
+            EDITOR_FILES+=("${MODULE}.cpp")
+        done
+
+
+    else
+
+        EDITOR_FILES+=("$@")
+
+    fi
+
+}
+
+kead_run_normal() {
+
+    local FILE="$1"
+
+    if [[ ! -f "$FILE" ]]; then
+
+        kead_process_stage "Detect file"
+
+        kead_output_start
+        kead_output_error "File not found: $FILE"
+        kead_output_end
+
+        kead_runtime "0 ms" "1"
+        kead_finish
+
+        return 1
+
+    fi
+
+    kead_process_stage "Detect file"
+
+    kead_prepare_editor_files "normal" "$FILE"
+
+    kead_process_stage "Open editor"
+
+    kead_open_editor "${EDITOR_FILES[@]}"
+
+    kead_process_stage "Compile"
+
+    local START_TIME
+    START_TIME=$(date +%s%N)
+
+    kead_backend_run "$FILE"
+    local EXIT_CODE=$?
+
+    local END_TIME
+    END_TIME=$(date +%s%N)
+
+    local RUNTIME
+    RUNTIME=$(((END_TIME - START_TIME) / 1000000))
+
+    kead_runtime "${RUNTIME} ms" "$EXIT_CODE"
+
+    kead_finish
+
+    return $EXIT_CODE
+
+}
+
+kead_run_modular() {
+
+    local MAIN="$1"
+
+    shift
+
+    if [[ $# -lt 1 ]]; then
+
+        kead_error "Modular mode requires at least one module"
+
+        return 1
+
+    fi
+
+
+    kead_process_stage "Detect project"
+
+    kead_prepare_editor_files "modular" "$MAIN" "$@"
+
+
+    kead_process_stage "Open editor"
+
+    kead_open_editor "${EDITOR_FILES[@]}"
+
+
+    local START_TIME
+    START_TIME=$(date +%s%N)
+
+
+    kead_process_stage "Compile"
+
+    kead_expand_modules "$@"
+
+    if ! kead_validate_modules; then
+        kead_runtime "0 ms" "1"
+        kead_finish
+        return 1
+    fi
+
+
+    if ! kead_modular_compile "$MAIN"; then
+
+        kead_output_start
+        kead_output_error "Build failed"
+        kead_output_end
+
+        kead_runtime "0 ms" "1"
+        kead_finish
+
+        return 1
+    fi
+
+
+    kead_run_stage
+
+    kead_output_start
+
+    kead_modular_run "$MAIN"
+    local EXIT_CODE=$?
+
+    kead_output_end
+
+
+    local END_TIME
+    END_TIME=$(date +%s%N)
+
+    local RUNTIME
+    RUNTIME=$(((END_TIME - START_TIME) / 1000000))
+
+
+    kead_runtime "${RUNTIME} ms" "$EXIT_CODE"
+
+    kead_finish
+
+
+    return $EXIT_CODE
+
+}
+
+kead_run_ncurses() {
+
+    local FILE="$1"
+
+    kead_process_stage "Detect file"
+
+    kead_prepare_editor_files "normal" "$FILE"
+
+    kead_process_stage "Open editor"
+
+    kead_open_editor "${EDITOR_FILES[@]}"
+
+
+    local START_TIME
+    START_TIME=$(date +%s%N)
+
+
+    kead_process_stage "Compile"
+
+
+    if ! kead_ncurses_compile "$FILE"; then
+
+        kead_output_start
+        kead_output_error "Build failed"
+        kead_output_end
+
+        kead_runtime "0 ms" "1"
+        kead_finish
+
+        return 1
+
+    fi
+
+
+    kead_run_stage
+
+    kead_output_start
+
+    kead_ncurses_run "$FILE"
+    local EXIT_CODE=$?
+
+    clear
+    kead_header
+
+    kead_output_start
+
+    echo
+    echo "NC program finished"
+
+    kead_output_end
+
+
+    local END_TIME
+    END_TIME=$(date +%s%N)
+
+
+    local RUNTIME
+    RUNTIME=$(((END_TIME - START_TIME) / 1000000))
+
+
+    kead_runtime "${RUNTIME} ms" "$EXIT_CODE"
+
+    kead_finish
+
+
+    return $EXIT_CODE
+
+}
+
+kead_run_ncurses_modular() {
+
+    local MAIN="$1"
+
+    shift
+
+    if [[ $# -lt 1 ]]; then
+
+        kead_error "Modular NCurses requires at least one module"
+        return 1
+
+    fi
+
+
+    kead_process_stage "Detect project"
+
+
+    kead_prepare_editor_files "modular" "$MAIN" "$@"
+
+
+    kead_process_stage "Open editor"
+
+
+    kead_open_editor "${EDITOR_FILES[@]}"
+
+
+    kead_process_stage "Compile"
+
+
+    local START_TIME
+    START_TIME=$(date +%s%N)
+
+
+    kead_run_stage
+
+    kead_output_start
+
+    kead_ncurses_modular_start "$MAIN" "$@"
+    local EXIT_CODE=$?
+
+    kead_output_end
+
+    echo
+    echo "NC program finished"
+
+
+    local END_TIME
+    END_TIME=$(date +%s%N)
+
+
+    local RUNTIME
+    RUNTIME=$(( (END_TIME - START_TIME) / 1000000 ))
+
+
+    kead_runtime "${RUNTIME} ms" "$EXIT_CODE"
+
+
+    kead_finish
+
+
+    return $EXIT_CODE
+
+}
+
+kead_run_web() {
+
+    local FILE="$1"
+
+    kead_process_stage "Detect web file"
+
+    kead_prepare_editor_files "normal" "$@"
+
+    kead_process_stage "Open editor"
+
+    kead_open_editor "${EDITOR_FILES[@]}"
+
+    kead_process_stage "Run web"
+
+    local START_TIME
+    START_TIME=$(date +%s%N)
+
+    kead_output_start
+
+    kead_web_run "$FILE"
+    local EXIT_CODE=$?
+
+    kead_output_end
+
+    local END_TIME
+    END_TIME=$(date +%s%N)
+
+    local RUNTIME
+    RUNTIME=$(( (END_TIME - START_TIME) / 1000000 ))
+
+    kead_runtime "${RUNTIME} ms" "$EXIT_CODE"
+
+    kead_finish
+
+    return $EXIT_CODE
+
+}
+
+
+COMMAND="$1"
+
+
+case "$COMMAND" in
+
+
+    run)
+
+        shift
+
+
+        if [[ "$1" == "-m" ]]; then
+
+            shift
+
+            kead_run_modular "$@"
+
+        else
+
+            kead_run_normal "$@"
+
+        fi
+
+        ;;
+
+
+    nc)
+
+        shift
+
+        if [[ "$1" == "-m" ]]; then
+
+            shift
+
+            kead_run_ncurses_modular "$@"
+
+        else
+
+            kead_run_ncurses "$@"
+
+        fi
+
+        ;;
+
+    web)
+
+        shift
+
+        kead_run_web "$@"
+
+        ;;
+
+
+    *)
+
+        echo "KEAD"
+        echo
+        echo "Usage:"
+        echo " kead run file.cpp"
+        echo " kead run -m main.cpp module1 module2"
+        echo " kead nc file.cpp"
+        echo " kead web index.html"
+
+        ;;
+
+
+esac
